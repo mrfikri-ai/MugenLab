@@ -1,5 +1,5 @@
 from time import time
-from typing import Callable
+from typing import Callable, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,7 +12,7 @@ from LazyVinh.convex_polygon_intersection import intersect
 def f(p1, p2):
     return -((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
-def Phi(point):
+def phi(point):
     center = [[2, 0.25], [1, 2.25], [1.9, 1.9], [2.35, 1.25], [0.1, 0.1]]
     result = 0
     for c in center:
@@ -78,7 +78,7 @@ def get_integral_over_convex_polygon(polygon: np.ndarray, function: Callable[[np
             result = result + scheme.integrate(lambda x: function_helper(x), [polygon[0], polygon[i], polygon[i+1]])
     return result
 
-def get_voronoi_partition(points: np.ndarray, border_polygon: np.ndarray) -> List[np.ndarray]: # type: ignore
+def get_voronoi_partitions(points: np.ndarray, border_polygon: np.ndarray) -> List[np.ndarray]:
     """
     Args:
         points: set of point for the voronoi partition
@@ -110,7 +110,7 @@ def get_voronoi_partition(points: np.ndarray, border_polygon: np.ndarray) -> Lis
     
     return voronoi_partition
 
-def h(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> float: # type: ignore
+def h(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> float:
     """The sensing performance function
 
     Args:
@@ -127,11 +127,11 @@ def h(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> float: # type
     result = 0
     for i in range(len(points)):
         def combined_function(point: np.ndarray) -> float:
-            return f(point, points[i]) * Phi(point)
+            return f(point, points[i]) * phi(point)
         result = result + get_integral_over_convex_polygon(voronoi_partitions[i], combined_function)
     return result
 
-def dhdp_centroid(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> np.ndarray: # type: ignore
+def dhdp_centroid(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> np.ndarray:
     """
     The dH/dp function for the Centroid case f(p) = -(|p - q| ** 2)
     This function runs for all points, not one single points. Thus, for this Centroid case, it is not spatially distributed
@@ -149,17 +149,17 @@ def dhdp_centroid(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> n
 
     result = []
     for i in range(len(points)):
-        mass = get_integral_over_convex_polygon(voronoi_partitions[i], Phi)
+        mass = get_integral_over_convex_polygon(voronoi_partitions[i], phi)
         def phi_x(point: np.ndarray) -> float:
-            return Phi(point) * point[0]
+            return phi(point) * point[0]
         center_of_mass_x = get_integral_over_convex_polygon(voronoi_partitions[i], phi_x) / mass
         def phi_y(point: np.ndarray) -> float:
-            return Phi(point) * point[1]
+            return phi(point) * point[1]
         center_of_mass_y = get_integral_over_convex_polygon(voronoi_partitions[i], phi_y) / mass
         result.append([2 * mass * (center_of_mass_x - points[i][0]), 2 * mass * (center_of_mass_y - points[i][1])])
     return np.array(result)
 
-def epsilon(point, voronoi_partition):
+def epsilon(point: np.ndarray, voronoi_partition: np.ndarray) -> float:
     return 0.1
     median = np.median(voronoi_partition, 0)
     return np.abs(median - np.array(point)) / 3
@@ -180,24 +180,24 @@ def simulate(points: np.ndarray, border_polygon: np.ndarray, max_simulation_time
     """
 
     points = np.copy(points) # to avoid modifying the client's variable
-    voronoi_partition = get_voronoi_partition(points, border_polygon)
+    voronoi_partition = get_voronoi_partitions(points, border_polygon)
     print("Initial H value:", h(points, voronoi_partition))
     draw_voronoi_partitions(points, voronoi_partition)
 
-    timeStart = time()
-    while time() - timeStart < max_simulation_time:
+    time_start = time()
+    while time() - time_start < max_simulation_time:
         dhdp = dhdp_centroid(points, voronoi_partition)
         # update points
         for i in range(len(points)):
             points[i] = points[i] + epsilon(points[i], voronoi_partition[i]) * dhdp[i] * points[i]
         # update voronoiPartition
-        voronoi_partition = get_voronoi_partition(points, border_polygon)
+        voronoi_partition = get_voronoi_partitions(points, border_polygon)
 
     print("Final H value:", h(points, voronoi_partition))
     draw_voronoi_partitions(points, voronoi_partition)
     return points
 
-def draw_voronoi_partitions(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> None: # type: ignore
+def draw_voronoi_partitions(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> None:
     """Draw the given points and voronoi_partitions using matplotlib
 
     Args:
