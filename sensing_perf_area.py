@@ -1,30 +1,42 @@
-import numpy as np
-from time import time
-
 import warnings
+from time import time
+from typing import Callable, List, Optional, Tuple, Union
+
+import matplotlib.patches
+import matplotlib.pyplot as plt
+import numpy as np
+import quadpy
+import scipy.integrate
+import scipy.spatial
+from scipy.spatial import Voronoi
+
+import LazyVinh.convex_polygon_intersection as LazyVinh
+
 warnings.filterwarnings('error', '.*extremely bad integrand behavior.*')
 
-def f(p1, p2):
-    import math
-
+def f(point1: np.ndarray, point2: np.ndarray) -> float:
     R = 0.45
-    dist = math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+    dist = np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2).flat[0] # np.sqrt returns np.ndarray
     if dist <= R: return 1
     else: return 0
 
-def Phi(point):
-    from math import exp
-
-    center = [[2, 0.25], [1, 2.25], [1.9, 1.9], [2.35, 1.25], [0.1, 0.1]]
+def phi(point: np.ndarray) -> float:
+    CENTER = [[2, 0.25], [1, 2.25], [1.9, 1.9], [2.35, 1.25], [0.1, 0.1]]
     result = 0
-    for c in center:
-        result = result + 5 * exp(-6 * ((point[0] - c[0])**2 + (point[1] - c[1])**2))
-    return result
+    for c in CENTER:
+        result = result + 5 * np.exp(-6 * ((point[0] - c[0])**2 + (point[1] - c[1])**2))
+    return result.flat[0] # np.exp changed it into ndarray
 
-def isPolygonCCW(polygon):
-    # input: a convex polygon where only the (i)th and (i+1)th point is connected (first and last points are also connected); list[npoints, 2]
-    #   *note that the polygon must be either CW or CCW
-    # return: a boolean value whether the points order is CCW or not; boolean
+def is_polygon_ccw(polygon : np.ndarray) -> bool:
+    """
+    Args:
+        polygon: a convex polygon in either CW or CCW order;
+            shape of ndarray is (npoints, 2)
+    
+    Returns:
+        a boolean value whether polygon is in CCW order or not
+    """
+
     # only need to check three consecutive points
     if len(polygon) < 3:
         return True
@@ -33,44 +45,73 @@ def isPolygonCCW(polygon):
         b = np.subtract(polygon[2], polygon[0])
         return np.cross(a, b) > 0
 
-def isPointQCloserToP(p, q, r):
-    # input: p is the "pivot", q and r is the one to be compared; ndarray shape(2)
-    # return: True if distance(p, q) is smaller than distance(q, r); boolean
+def is_point_q_closer_to_p_than_r(p: np.ndarray, q: np.ndarray, r: np.ndarray) -> bool:
+    """
+    Args:
+        p: the "pivot" point
+        q, r: point to be compared
+            p, q, and r's shape of ndarray is (2,)
+    Returns:
+        True if distance(p, q) is strictly smaller than distance(p, r)
+    """
+
     return np.abs(np.linalg.norm(q - p)) < np.abs(np.linalg.norm(r - p))
 
-def getVectorAngle(v):
-    # return: a number in range of 0 to 2pi inclusive; float
-    lenV = np.abs(np.linalg.norm(v))
-    assert(lenV > 0)
-    v = v / lenV
-    angle = np.arccos(np.clip(np.dot(v, np.array([1, 0])), -1.0, 1.0))
-    if v[1] < 0:
+def get_vector_angle(vector: np.ndarray) -> float:
+    """
+    Args:
+        vector: nonzero 2d vector
+            shape of ndarray is (2,)
+    Returns:
+        a number in range of 0 to 2pi inclusive
+            for example, vector(1, 0) returns 0 and vector(-1, 0) returns pi
+    """
+
+    length = np.abs(np.linalg.norm(vector))
+    assert(length > 0)
+    vector = vector / length
+    angle = np.arccos(np.clip(np.dot(vector, np.array([1, 0])), -1.0, 1.0)).flat[0] # np.arccos returns np.ndarray
+    if vector[1] < 0:
         angle = 2 * np.pi - angle
     return angle
 
-def getAngleBetweenVectors(v1, v2):
-    # input: v1 and v2 are nonzero ndarray; ndarray shape(2)
-    #   if v2 is not specified, then v2 = [1, 0]
-    lenV1 = abs(np.linalg.norm(v1))
-    lenV2 = abs(np.linalg.norm(v2))
-    assert(lenV1 > 0 and lenV2 > 0)
-    v1 = v1 / lenV1
-    v2 = v2 / lenV2
-    return np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
+def get_angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
+    """Get the smaller angle between vector v1 and v2
+    Args:
+        v1, v2: nonzero 2d vector
+            shape of ndarray is (2,)
+    
+    Returns:
+        the smaller angle between v1 and v2
+    """
+    
+    length1 = abs(np.linalg.norm(v1))
+    length2 = abs(np.linalg.norm(v2))
+    assert(length1 > 0 and length2 > 0)
+    v1 = v1 / length1
+    v2 = v2 / length2
+    return np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0)).flat[0] # np.arccos returns np.ndarray
 
-def getRotatedVector(vector, angle):
+def get_rotated_vector(vector: np.ndarray, angle: float) -> np.ndarray:
     rotation = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
     return np.dot(rotation, vector)
 
-def getIntersectionLineSegment(s1, s2):
-    # credit: https://gist.github.com/kylemcdonald/6132fc1c29fd3767691442ba4bc84018
-    # input: s1 and s2 are line segment; list[2, 2]
-    # return: if exist, the intersection point, otherwise None; list[2] or None
+def get_intersection_line_segments(segment1, segment2) -> Optional[np.ndarray]:
+    """
+    Args:
+        segment1, segment2: each defined as (endpoint1, endpoint2)
+            shape of ndarray is (2, 2)
+    
+    Returns:
+        a point if segment intersects; None otherwise
 
-    x1, y1 = s1[0]
-    x2, y2 = s1[1]
-    x3, y3 = s2[0]
-    x4, y4 = s2[1]
+    From: https://gist.github.com/kylemcdonald/6132fc1c29fd3767691442ba4bc84018
+    """
+
+    x1, y1 = segment1[0]
+    x2, y2 = segment1[1]
+    x3, y3 = segment2[0]
+    x4, y4 = segment2[1]
     denom = (y4-y3)*(x2-x1) - (x4-x3)*(y2-y1)
     if denom == 0: # parallel
         return None
@@ -82,29 +123,39 @@ def getIntersectionLineSegment(s1, s2):
         return None
     x = x1 + ua * (x2-x1)
     y = y1 + ua * (y2-y1)
-    return [x,y]
+    return np.array([x,y])
 
-def getIntersectionCircleAndLineSegment(circleCenter, circleRadius, p1, p2, full_line=True, tangent_tol=1e-9):
-    """ From: https://stackoverflow.com/a/59582674/12607236
+# TODO merge p1, p2 argument to segment
+def get_intersection_circle_and_line_segment(circle_center: np.ndarray,
+                                             circle_radius: np.ndarray,
+                                             p1: np.ndarray,
+                                             p2: np.ndarray,
+                                             full_line: bool = True,
+                                             tangent_tol: float = 1e-9) -> List[Tuple[float, float]]: # type: ignore
+    """
     Find the points at which a circle intersects a line-segment.  This can happen at 0, 1, or 2 points.
 
-    :param circle_center: The (x, y) location of the circle center
-    :param circle_radius: The radius of the circle
-    :param pt1: The (x, y) location of the first point of the segment
-    :param pt2: The (x, y) location of the second point of the segment
-    :param full_line: True to find intersections along full line - not just in the segment.  False will just return intersections within the segment.
-    :param tangent_tol: Numerical tolerance at which we decide the intersections are close enough to consider it a tangent
-    :return Sequence[Tuple[float, float]]: A list of length 0, 1, or 2, where each element is a point at which the circle intercepts a line segment.
+    Args:
+        circle_center: The (x, y) location of the circle center
+        circle_radius: The radius of the circle
+        p1: The (x, y) location of the first point of the segment
+        p2: The (x, y) location of the second point of the segment
+        full_line: True to find intersections along full line - not just in the segment.  False will just return intersections within the segment.
+        tangent_tol: Numerical tolerance at which we decide the intersections are close enough to consider it a tangent
+    
+    Returns:
+        a list of length 0, 1, or 2, where each element is a point at which the circle intercepts a line segment.
 
     Note: We follow: http://mathworld.wolfram.com/Circle-LineIntersection.html
+    From: https://stackoverflow.com/a/59582674/12607236
     """
 
-    (p1x, p1y), (p2x, p2y), (cx, cy) = p1, p2, circleCenter
+    (p1x, p1y), (p2x, p2y), (cx, cy) = p1, p2, circle_center
     (x1, y1), (x2, y2) = (p1x - cx, p1y - cy), (p2x - cx, p2y - cy)
     dx, dy = (x2 - x1), (y2 - y1)
     dr = (dx ** 2 + dy ** 2)**.5
     big_d = x1 * y2 - x2 * y1
-    discriminant = circleRadius ** 2 * dr ** 2 - big_d ** 2
+    discriminant = circle_radius ** 2 * dr ** 2 - big_d ** 2
 
     if discriminant < 0:  # No intersection between circle and line
         return []
@@ -121,317 +172,393 @@ def getIntersectionCircleAndLineSegment(circleCenter, circleRadius, p1, p2, full
         else:
             return intersections
 
-def getIntersectionPolygon(p1, p2):
-    # input: p1 and p2 is convex polygon in CCW order; list[npoints, 2]
-    # return: list of points of the polygon in CCW order; ndarray shape(nresultpoints, 2)
-    from imports.LazyVinh.convex_polygon_intersection import intersect
+def get_intersection_polygon(polygon1: np.ndarray, polygon2: np.ndarray) -> np.ndarray:
+    """
+    Args:
+        polygon1, polygon2: convex polygon in CCW order
+            shape of ndarray is (npoints, 2)
+    
+    Returns:
+        points of the polygon in CCW order.
+            shape of ndarray is (npoints, 2)
+    """
 
-    intersection = intersect(p1, p2)
-    return np.array([np.array(points) for points in intersection])
+    intersection = LazyVinh.intersect(polygon1, polygon2)
+    return np.array(intersection)
 
-def getIntegralOverConvexPolygon(polygon, function, functionDegree = 12):
-    # input:
-    #   a convex polygon in CCW order; list[npoints, 2]
-    #   a function to be integrated over the polygon; a function that accepts exactly 1 argument
-    #       the argument format is list[2]
-    #   functionDegree is the highest polynomial degree of the function, used to determine what integration algorithm will be used; an integer
-    # return: the resulting integral duh
-    import quadpy
-
+def get_integral_over_convex_polygon(polygon: np.ndarray, function: Callable[[np.ndarray], float], function_degree: int = 12) -> float:
+    """
+    Args:
+        polygon: a convex polygon in CCW order
+            shape of ndarray is (npoints, 2)
+        function: a function to be integrated over the polygon
+            shape of arg ndarray is (2,)
+        function_degree: the highest polynomial degree of the function, used to determine what integration algorithm will be used
+    
+    Returns:
+        the resulting integration
+    """
+    
     # quadpy needs a function to accept array of testValues. this function will help that
-    def funcHelper(testValues):
-        result = np.zeros(testValues.shape[1])
-        for i in range(testValues.shape[1]):
-            result[i] = function(testValues[:,i])
+    def function_helper(test_values):
+        result = np.zeros(test_values.shape[1])
+        for i in range(test_values.shape[1]):
+            result[i] = function(test_values[:,i])
         return result
     
-    scheme = quadpy.t2.get_good_scheme(functionDegree)
+    scheme = quadpy.t2.get_good_scheme(function_degree)
     result = 0
     if len(polygon) >= 3:
         for i in range(1, len(polygon) - 1):
-            result = result + scheme.integrate(lambda x: funcHelper(x), [polygon[0], polygon[i], polygon[i+1]])
+            result = result + scheme.integrate(lambda x: function_helper(x), [polygon[0], polygon[i], polygon[i+1]])
     return result
 
-def getIntegralOverArc(arcCenter, arcRadius, arcAngleFrom, arcAngleTo, function):
-    # inputs:
-    #   arc... define the properties of the arc. arcAngle... is in radian; float
-    #       arcCenter format is list[2]
-    #       arcRadius, arcAngleFrom, arcAngleTo format are float
-    #   function is the function to be integrated; a function that accepts exactly 1 argument
-    #       the argument format is list[2]
-    # return: the resulting integral duh; float
-    from scipy.integrate import quad
+def get_integral_over_arc(arc_center: np.ndarray, arc_radius: float, arc_angle_from: float, arc_angle_to: float, function: Callable[[np.ndarray], float]) -> float:
+    """
+    Args:
+        arc_center, arc_radius, arc_angle_from, arc_angle_to: define the properties of the arc
+            arc_center shape of ndarray is (2,)
+            arc_angle... is in radian
+        function: the function to be integrated
+    
+    Returns:
+        the resulting integral
+    """
 
-    def functionHelper(angle):
-        point = np.array(arcCenter)
-        direction = getRotatedVector(np.array([arcRadius, 0]), angle)
-        return function(point + direction)
-    return quad(functionHelper, arcAngleFrom, arcAngleTo, limit=100)[0]
+    def function_helper(angle):
+        direction = get_rotated_vector(np.array([arc_radius, 0]), angle)
+        return function(arc_center + direction)
+    return scipy.integrate.quad(function_helper, arc_angle_from, arc_angle_to, limit=100)[0] # quad returns tuple (result, error)
 
-def getUnitNormalAtPointInArc(arcCenter, arcPoint):
-    # return: a unit normal at arcPoint in an arc with arcCenter as its center; list[2]
-    vector = np.array(arcPoint) - np.array(arcCenter)
+# TODO create a normalize() function instead
+def get_unit_normal_at_point_in_arc(arc_center: np.ndarray, arc_point: np.ndarray) -> np.ndarray:
+    """
+    Args:
+        arc_center: the center of the arc
+        arc_point: the point in question
+
+    Returns:
+        a unit normal at arc_point in an arc with arc_center as its center
+    """
+
+    vector = arc_point - arc_center
     normal = vector / np.linalg.norm(vector)
     return normal
 
-def getNearPoints(points, indexPoint, radius):
-    # input:
-    #   points is the list of points; list[npoints, 2]
-    #   indexPoint is the index of the point inside points of what we are interested in; integer
-    #   radius is the maximum of distance between points[indexPoint] and point[i]; float
-    # return: list of points that is close to the indexPoint, without the point itself; list[nresult, 2]
+def get_near_points(points: np.ndarray, index_point: int, radius: float) -> np.ndarray:
+    """
+    Args:
+        points: the list of points
+            shape of ndarray is (npoints, 2)
+        indexPoint: the index of the point inside points of what we are interested in
+        radius: the maximum allowed distance between two points to be considered as "near"
+    
+    Returns:
+        list of points that is close to the indexPoint, without the point itself
+            shape of ndarray is (n_near_points, 2)
+    """
 
     result = list()
     for i in range(len(points)):
-        if i != indexPoint:
-            distance = np.abs(np.linalg.norm(np.array(points[i]) - np.array(points[indexPoint])))
+        if i != index_point:
+            distance = np.abs(np.linalg.norm(points[i] - points[index_point]))
             if distance <= radius:
-                result.append(points[i].copy())
-    return result
+                result.append(points[i])
+    return np.array(result)
 
-def getVoronoiPartition(points, borderPolygon):
-    # inputs: borderPolygon is the "border" of the voronoi partition in CCW order; list[npoints, 2]
-    # return: a list of polygons, where the ith polygon is the voronoi partition of the ith point in CCW order; list[npoints] consisting of ndarrays shape(n[i], 2)
-    from scipy.spatial import Voronoi
-
-    borderCoord = 1e6 # for now, let's assume 1e6 is big enough
-
-    timeStart = time()
-    newPoints = points.copy()
-    newPoints.append([-borderCoord, 0])
-    newPoints.append([borderCoord, 0])
-    newPoints.append([0, -borderCoord])
-    newPoints.append([0, borderCoord])
+def get_voronoi_partitions(points: np.ndarray, border_polygon: np.ndarray) -> List[np.ndarray]:
+    """
+    Args:
+        points: set of point for the voronoi partition
+            shape of ndarray is (npoints, 2)
+        border_polygon: "border" of the voronoi partition in CCW order
+            shape of ndarray is (n_border_points, 2)
     
-    voronoi = Voronoi(newPoints)
-    voronoiPartition = []
-    for i in range(len(points)):
-        regionIndex = voronoi.point_region[i]
-        regionPoints = []
-        for j in voronoi.regions[regionIndex]:
-            assert(j != -1), "Region " + newPoints[i] + " is not bounded"
-            regionPoints.append(voronoi.vertices[j])
-        if not(isPolygonCCW(regionPoints)): # scipy's voronoi region order is either CW or CCW, so we need to fix it to become CCW
-            regionPoints.reverse()
-        voronoiPartition.append(getIntersectionPolygon(regionPoints, borderPolygon))
+    Returns:
+        a list of polygons, where the ith polygon is the voronoi partition of the ith point in CCW order
+            shape of ndarray is (n_polygon_points, 2)
+    """
+
+    BORDER_COORD = 1e6 # for now, let's assume 1e6 is big enough
+    # add 4 border points so that the voronoi partition shape will be limited
+    new_points = np.append(points, [[-BORDER_COORD, 0], [BORDER_COORD, 0], [0, -BORDER_COORD], [0, BORDER_COORD]], 0)
     
-    # print("getVoronoiPartition execution time:", time() - timeStart)
-    return voronoiPartition
+    voronoi = Voronoi(new_points)
+    voronoi_partition = []
+    for i in range(len(points)): # discarding the 4 border points
+        region_index = voronoi.point_region[i]
+        region_points = []
+        for j in voronoi.regions[region_index]:
+            assert(j != -1), "Region " + new_points[i] + " is not bounded"
+            region_points.append(voronoi.vertices[j])
+        if not(is_polygon_ccw(region_points)): # scipy's voronoi region order is either CW or CCW, so we need to fix it to become CCW
+            region_points.reverse()
+        region_points = np.array(region_points)
+        voronoi_partition.append(get_intersection_polygon(region_points, border_polygon))
+    
+    return voronoi_partition
 
-def getLimitedVoronoiPartition(point, nearPoints, radius, borderPolygon, angleErrorTolerance = 1e-8):
-    # inputs:
-    #   point; list[2]
-    #   nearPoints; list[npoints, 2]
-    #   radius; float
-    # return: list of line segments and arcs that describe this point's limited voronoi partition; list[nobjects, 3]
-    #   a line segment and arc is differentiated by the first value of the list, where line segment is 0 and arc is 1
-    #       a line segment entry is defined by [0, endPoint1, endPoint2]; endPoint1 and endPoint2 is ndarray shape(2)
-    #       an arc entry is defined by [1, angleStart, angleEnd]; angleStart and angleEnd is float
-    #           angleStart <= angleEnd is always true
-    import scipy.spatial
+def get_limited_voronoi_partition(point: np.ndarray,
+                                  near_points: np.ndarray,
+                                  half_radius: float,
+                                  border_polygon: np.ndarray,
+                                  angle_error_tolerance: float = 1e-8) -> List[Union[Tuple[int, np.ndarray, np.ndarray], Tuple[int, float, float]]]:
+    """
+    Args:
+        point: a single point
+            shape of ndarray is (2,)
+        near_points: points which are not further than radius from point
+        half_radius: the radius of the ball. in other words, half of the maximum allowed distance between two points to be considered as neighbor
+        border_polygon: "border" of the voronoi partition in CCW order
+            shape of ndarray is (n_border_points, 2)
+    
+    Returns:
+        list of line segments and arcs that describe this point's limited voronoi partition
+        a line segment and arc is differentiated by the first value of the list, where line segment is 0 and arc is 1
+            a line segment entry is defined by [0, endPoint1, endPoint2]
+            an arc entry is defined by [1, angleStart, angleEnd], where angleStart <= angleEnd
+    """
 
-    point = np.array(point)
-    neighborPoints = list()
-    if len(nearPoints) < 2:
-        for nearPoint in nearPoints:
-            neighborPoints.append(np.array(nearPoint))
+    point = np.copy(point) # to avoid modifying client's variable
+    neighbor_points = list()
+    if len(near_points) < 2:
+        for near_point in near_points:
+            neighbor_points.append(np.copy(near_point))
     else:
-        allPoints = np.append([point], nearPoints, 0)
-        delaunay = scipy.spatial.Delaunay(allPoints)
-        neighborPointsIndex = set()
+        all_points = np.append([point], near_points, 0)
+        delaunay = scipy.spatial.Delaunay(all_points)
+        neighbor_points_index = set()
         assert(point[0] == delaunay.points[0][0] and point[1] == delaunay.points[0][1])
         for triangle in delaunay.simplices:
             if 0 in triangle:
                 for index in triangle:
                     if index != 0:
-                        neighborPointsIndex.add(index)
-        neighborPoints = [delaunay.points[index] for index in neighborPointsIndex]
+                        neighbor_points_index.add(index)
+        neighbor_points = [delaunay.points[index] for index in neighbor_points_index]
 
-    uncutSegments = [] # the "voronoi" segments created by these neighbor points. some of these segments might overlap each other
-    for neighborPoint in neighborPoints:
+    uncut_segments = list() # the "voronoi" segments created by these neighbor points. some of these segments might overlap each other
+    for neighbor_point in neighbor_points:
         # finding each segment's endpoints at the circle(point, radius)
-        direction = neighborPoint - point
-        directionAngle = getVectorAngle(direction)
-        distanceToMidPoint = np.abs(np.linalg.norm(direction / 2))
-        deltaAngle = np.arccos(distanceToMidPoint / radius)
+        direction = neighbor_point - point
+        direction_angle = get_vector_angle(direction)
+        distance_to_mid_point = np.abs(np.linalg.norm(direction / 2))
+        delta_angle = np.arccos(distance_to_mid_point / half_radius).flat[0]
         # endPoint1 to endPoint2 is in CCW order
-        endPoint1 = point + getRotatedVector(np.array([radius, 0]), directionAngle - deltaAngle)
-        endPoint2 = point + getRotatedVector(np.array([radius, 0]), directionAngle + deltaAngle)
-        uncutSegments.append([endPoint1, endPoint2])
-    for i in range(len(borderPolygon)): # for border polygon
-        endPoint1 = np.array(borderPolygon[i-1])
-        endPoint2 = np.array(borderPolygon[i])
+        endpoint1 = point + get_rotated_vector(np.array([half_radius, 0]), direction_angle - delta_angle)
+        endpoint2 = point + get_rotated_vector(np.array([half_radius, 0]), direction_angle + delta_angle)
+        uncut_segments.append([endpoint1, endpoint2])
+    for i in range(len(border_polygon)): # for border polygon
+        endpoint1 = np.copy(border_polygon[i-1])
+        endpoint2 = np.copy(border_polygon[i])
         # we regard this "line segment" as an "infinity line", because all uncutSegments have their endPoints at the circle
-        intersections = getIntersectionCircleAndLineSegment(point, radius, endPoint1, endPoint2)
+        intersections = get_intersection_circle_and_line_segment(point, half_radius, endpoint1, endpoint2)
         if len(intersections) == 2:
-            uncutSegments.append([intersections[0], intersections[1]])
+            uncut_segments.append([intersections[0], intersections[1]])
         else:
             assert(len(intersections) == 0 or len(intersections) == 1), "Unexpected number of intersections"
-    uncutSegments = np.array(uncutSegments)
-    
-    cutSegments = list()
-    cutSegmentsAngleRange = list() # there are no "jumping" range
-    for segment in uncutSegments:
-        endPoint1 = segment[0]
-        endPoint2 = segment[1]
-        shouldInsert = True
-        for otherSegment in uncutSegments:
-            if not np.array_equal(segment, otherSegment):
-                intersection = getIntersectionLineSegment(segment, otherSegment)
-                intersection1 = getIntersectionLineSegment([point, endPoint1], otherSegment)
-                intersection2 = getIntersectionLineSegment([point, endPoint2], otherSegment)
+    uncut_segments = np.array(uncut_segments)
+
+    cut_segments = list()
+    cut_segments_angle_range = list() # there are no "jumping" range
+    for segment in uncut_segments:
+        endpoint1 = segment[0]
+        endpoint2 = segment[1]
+        should_insert = True
+        for other_segment in uncut_segments:
+            if not np.array_equal(segment, other_segment):
+                intersection = get_intersection_line_segments(segment, other_segment)
+                intersection1 = get_intersection_line_segments([point, endpoint1], other_segment)
+                intersection2 = get_intersection_line_segments([point, endpoint2], other_segment)
                 if (intersection1 is not None) and (intersection2 is not None):
-                    shouldInsert = False
+                    should_insert = False
                     break
                 elif intersection is not None:
                     if intersection1 is not None:
-                        endPoint1 = intersection
+                        endpoint1 = intersection
                     if intersection2 is not None:
-                        endPoint2 = intersection
-        if shouldInsert:
-            cutSegments.append([endPoint1, endPoint2])
-            angleRangeFrom = getVectorAngle(endPoint1 - point)
-            angleRangeTo = getVectorAngle(endPoint2 - point)
-            if angleRangeFrom <= angleRangeTo:
-                cutSegmentsAngleRange.append([angleRangeFrom, angleRangeTo])
+                        endpoint2 = intersection
+        if should_insert:
+            cut_segments.append([endpoint1, endpoint2])
+            angle_range_from = get_vector_angle(endpoint1 - point)
+            angle_range_to = get_vector_angle(endpoint2 - point)
+            if angle_range_from <= angle_range_to:
+                cut_segments_angle_range.append([angle_range_from, angle_range_to])
             else: # avoiding "jumping" range
-                cutSegmentsAngleRange.append([angleRangeFrom, 2 * np.pi])
-                cutSegmentsAngleRange.append([0, angleRangeTo])
+                cut_segments_angle_range.append([angle_range_from, 2 * np.pi])
+                cut_segments_angle_range.append([0, angle_range_to])
 
-    limitedVoronoiPartition = list()
-    for segment in cutSegments:
-        limitedVoronoiPartition.append([0, segment[0], segment[1]])
+    limited_voronoi_partition = list()
+    for segment in cut_segments:
+        limited_voronoi_partition.append((0, segment[0], segment[1]))
 
     # comparator function for sorting cutSegmentsAngleRange
     # the "smallest" range is a range where it has the smallest start point
     def compare(item):
         return item[0]
-    cutSegmentsAngleRange.sort(key=compare)
-    prevAngle = 0
-    indexAngleRange = 0
-    while prevAngle < 2 * np.pi and indexAngleRange < len(cutSegmentsAngleRange):
-        isBigEnough = (abs(prevAngle - cutSegmentsAngleRange[indexAngleRange][0]) > angleErrorTolerance)
-        if prevAngle < cutSegmentsAngleRange[indexAngleRange][0] and isBigEnough:
-            limitedVoronoiPartition.append([1, prevAngle, cutSegmentsAngleRange[indexAngleRange][0]])
-        prevAngle = max(prevAngle, cutSegmentsAngleRange[indexAngleRange][1])
-        indexAngleRange = indexAngleRange + 1
-    if prevAngle < 2 * np.pi:
-        limitedVoronoiPartition.append([1, prevAngle, 2 * np.pi])
+    cut_segments_angle_range.sort(key=compare)
+    prev_angle = 0
+    for i in range(len(cut_segments_angle_range)):
+        if prev_angle >= 2 * np.pi: break
+        isBigEnough = (abs(prev_angle - cut_segments_angle_range[i][0]) > angle_error_tolerance)
+        if prev_angle < cut_segments_angle_range[i][0] and isBigEnough:
+            limited_voronoi_partition.append([1, prev_angle, cut_segments_angle_range[i][0]])
+        prev_angle = max(prev_angle, cut_segments_angle_range[i][1])
+    if prev_angle < 2 * np.pi:
+        limited_voronoi_partition.append((1, prev_angle, 2 * np.pi))
 
-    return limitedVoronoiPartition
+    return limited_voronoi_partition
 
-def H(points, voronoiPartition):    
-    timeStart = time()
+def h(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> float:
+    """The sensing performance function
+
+    Args:
+        points: position of the agents
+            shape of ndarray is (npoints, 2)
+        voronoi_partitions: voronoi partition of points after intersected with a certain border polygon
+            the ith element is the ith point's voronoi partition in CCW order
+            shape of ndarray is (n_ith_point_polygon, 2)
+    
+    Returns:
+        the value of sensing performance.
+    """
+
     result = 0
     for i in range(len(points)):
-        def combinedFunction(point):
-            return f(point, points[i]) * Phi(point)
-        result = result + getIntegralOverConvexPolygon(voronoiPartition[i], combinedFunction)
-    # print("H execution time:", time() - timeStart)
+        def combined_function(point: np.ndarray) -> float:
+            return f(point, points[i]) * phi(point)
+        result = result + get_integral_over_convex_polygon(voronoi_partitions[i], combined_function)
     return result
 
-def dHdpCentroid(points, voronoiPartition):
-    result = []
-    for i in range(len(points)):
-        mass = getIntegralOverConvexPolygon(voronoiPartition[i], Phi)
-        def PhiX(point):
-            return Phi(point) * point[0]
-        centerOfMassX = getIntegralOverConvexPolygon(voronoiPartition[i], PhiX) / mass
-        def PhiY(point):
-            return Phi(point) * point[1]
-        centerOfMassY = getIntegralOverConvexPolygon(voronoiPartition[i], PhiY) / mass
-        result.append([2 * mass * (centerOfMassX - points[i][0]), 2 * mass * (centerOfMassY - points[i][1])])
-    return np.array(result)
+def dhdp_area(point: np.ndarray, limited_voronoi_partition: np.ndarray, half_radius: float) -> float:
+    """
+    The dH/dp function for the Area case f(p) = {1 if |p - q| <= radius; 0 otherwise}
+    This function runs for one single point. Thus, for this Area case, it is spatially distributed
 
-def dHdpArea(point, limitedVoronoiPartition, radius):
-    def functionX(p):
-        normal = getUnitNormalAtPointInArc(point, p)
-        return normal[0] * Phi(p)
-    def functionY(p):
-        normal = getUnitNormalAtPointInArc(point, p)
-        return normal[1] * Phi(p)
+    Args:
+        point: position of the agent
+            shape of ndarray is (2,)
+        limited_voronoi_partition: limited voronoi partition of the point after intersected with a certain border polygon
+            refer to get_limited_voronoi_partition function's returns for detailed explanation;
+            shape of ndarray is (npolygonpoints, 2)
+        half_radius: the radius of the ball. in other words, half of the maximum allowed distance between two points to be considered as neighbor
+
+    Returns:
+        the dHdp value for the point
+    """
+
+    def function_x(p):
+        normal = get_unit_normal_at_point_in_arc(point, p)
+        return normal[0] * phi(p)
+    def function_y(p):
+        normal = get_unit_normal_at_point_in_arc(point, p)
+        return normal[1] * phi(p)
     
     result = np.zeros((2))
-    for border in limitedVoronoiPartition:
+    for border in limited_voronoi_partition:
         if border[0] == 1:
-            result[0] = result[0] + getIntegralOverArc(point, radius, border[1], border[2], functionX)
-            result[1] = result[1] + getIntegralOverArc(point, radius, border[1], border[2], functionY)
+            result[0] = result[0] + get_integral_over_arc(point, half_radius, border[1], border[2], function_x)
+            result[1] = result[1] + get_integral_over_arc(point, half_radius, border[1], border[2], function_y)
     return result
 
-def epsilon(point, currentVoronoiPartition): # currently not used. look inside simulate() function for epsilon
-    return 0.03
-    median = np.median(currentVoronoiPartition, 0)
+def epsilon(point: np.ndarray, limited_voronoi_partition: np.ndarray) -> float:
+    return 0.002
+    median = np.median(limited_voronoi_partition, 0)
     return np.abs(median - np.array(point)) / 3
 
-def simulate(points, radius, borderPolygon, maxTime = 30):
-    voronoiPartition = getVoronoiPartition(points, borderPolygon)
-    print("Initial H value:", H(points, voronoiPartition))
-    drawLimitedVoronoiPartition(points, radius, borderPolygon)
-    timeStart = time()
-    while time() - timeStart < maxTime:
+def simulate(points: np.ndarray, radius: float, border_polygon: np.ndarray, max_simulation_time: float = 30) -> np.ndarray:
+    """Run the deployment simulation to a set of agent points to increase overall sensing performance
+
+    Args:
+        points: position of the agents
+            shape of ndarray is (npoints, 2)
+        radius: the maximum allowed distance between two points to be considered as neighbor
+        border_polygon: "border" of the voronoi partition in CCW order
+            shape of ndarray is (n_border_points, 2)
+        max_simulation_time: max simulation time
+    
+    Returns:
+        the position of the agents after deployment
+            shape of ndarray is (npoints, 2)
+    """
+
+    voronoi_partition = get_voronoi_partitions(points, border_polygon)
+    print("Initial H value:", h(points, voronoi_partition))
+    draw_limited_voronoi_partitions(points, radius, border_polygon)
+
+    time_start = time()
+    while time() - time_start < max_simulation_time:
         # update points
-        newPoints = [None] * len(points)
+        new_points = np.zeros(points.shape)
         for i in range(len(points)):
-            limitedVoronoiPartition = getLimitedVoronoiPartition(points[i], getNearPoints(points, i, radius), radius / 2, borderPolygon)
-            dHdp = dHdpArea(points[i], limitedVoronoiPartition, radius / 2)
-            epsilon = 0.002
-            newPoints[i] = np.array(points[i]) + epsilon * dHdp * np.array(points[i])
-        points = newPoints
-    print("Final H value:", H(points, voronoiPartition))
-    drawLimitedVoronoiPartition(points, radius, borderPolygon)
+            limitedVoronoiPartition = get_limited_voronoi_partition(points[i], get_near_points(points, i, radius), radius / 2, border_polygon)
+            dHdp = dhdp_area(points[i], limitedVoronoiPartition, radius / 2)
+            new_points[i] = points[i] + epsilon(points[i], limitedVoronoiPartition) * dHdp * points[i]
+        points = new_points
+    
+    voronoi_partition = get_voronoi_partitions(points, border_polygon)
+    print("Final H value:", h(points, voronoi_partition))
+    draw_limited_voronoi_partitions(points, radius, border_polygon)
 
-def printVoronoiPartition(points, voronoiPartition):
-    import matplotlib.pyplot as plt
+def draw_voronoi_partitions(points: np.ndarray, voronoi_partitions: List[np.ndarray]) -> None:
+    """Draw the given points and voronoi_partitions using matplotlib
 
-    timeStart = time()
-    for i in range(len(voronoiPartition)):
+    Args:
+        points: position of the agents
+            shape of ndarray is (npoints, 2)
+        voronoi_partitions: voronoi partition of points after intersected with a certain border polygon
+            the ith element is the ith point's voronoi partition in CCW order
+            shape of ndarray is (n_ith_point_polygon, 2)
+
+    Returns:
+        None
+    """
+
+    for i in range(len(voronoi_partitions)):
         plt.plot(points[i][0], points[i][1], 'ro')
-        plt.plot(np.append(voronoiPartition[i][:,0], voronoiPartition[i][0,0]), np.append(voronoiPartition[i][:,1], voronoiPartition[i][0,1]))
-    # print("printVoronoiPartition execution time:", time() - timeStart)
+        plt.plot(np.append(voronoi_partitions[i][:,0], voronoi_partitions[i][0,0]), np.append(voronoi_partitions[i][:,1], voronoi_partitions[i][0,1]))
     plt.show()
 
-def drawLimitedVoronoiPartition(points, radius, borderPolygon):
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Arc
+def draw_limited_voronoi_partitions(points: np.ndarray, radius: float, border_polygon: np.ndarray) -> None:
+    """Draw the given points and limited voronoi partition using matplotlib
+
+    Args:
+        points: position of the agents
+            shape of ndarray is (npoints, 2)
+        radius: the maximum allowed distance between two points to be considered as neighbor
+        border_polygon: "border" of the voronoi partition in CCW order
+            shape of ndarray is (n_border_points, 2)
+
+    Returns:
+        None
+    """
 
     # draw partition
-    limitedVoronoiPartitions = list()
+    limited_voronoi_partitions = list()
     for i in range(len(points)):
-        limitedVoronoiPartition = getLimitedVoronoiPartition(points[i], getNearPoints(points, i, radius), radius / 2, borderPolygon)
-        limitedVoronoiPartitions.append(limitedVoronoiPartition)
+        limited_voronoi_partition = get_limited_voronoi_partition(points[i], get_near_points(points, i, radius), radius / 2, border_polygon)
+        limited_voronoi_partitions.append(limited_voronoi_partition)
 
     fig, ax = plt.subplots()
     for i in range(len(points)):
         ax.plot(points[i][0], points[i][1], 'ro')
-        for currentPartition in limitedVoronoiPartitions[i]:
-            if currentPartition[0] == 0: # a line segment
-                x = [currentPartition[1][0], currentPartition[2][0]]
-                y = [currentPartition[1][1], currentPartition[2][1]]
+        for current_partition in limited_voronoi_partitions[i]:
+            if current_partition[0] == 0: # a line segment
+                x = [current_partition[1][0], current_partition[2][0]]
+                y = [current_partition[1][1], current_partition[2][1]]
                 ax.plot(x, y)
             else: # an arc
-                arc = Arc(points[i], radius, radius, 0, np.rad2deg(currentPartition[1]), np.rad2deg(currentPartition[2]))
+                arc = matplotlib.patches.Arc(points[i], radius, radius, 0, np.rad2deg(current_partition[1]), np.rad2deg(current_partition[2]))
                 ax.add_patch(arc)
 
-    borderPolygon = np.array(borderPolygon)
-    borderPolygon = np.append(borderPolygon, [borderPolygon[0]], 0)
-    ax.plot(borderPolygon[:,0], borderPolygon[:,1])
+    border_polygon = np.array(border_polygon)
+    border_polygon = np.append(border_polygon, [border_polygon[0]], 0)
+    ax.plot(border_polygon[:,0], border_polygon[:,1])
 
-    # fig.set_figheight(6)
-    # fig.set_figwidth(6)
-    # # plt.xlim(-3, 7)
-    # # plt.ylim(-3, 7)
-    # plt.xlim(0, 3)
-    # plt.ylim(0, 3)
     plt.axis('scaled')
     plt.show()
 
-points = [[0.515, 0.8], [0.585, 0.995], [0.735, 1.1], [0.76, 0.845], [0.88, 0.755], [0.885, 0.55], [0.93, 1.07], [1.11, 0.4], [1.155, 1.135], [1.21, 0.68], [1.345, 0.48], [1.38, 0.565], [2.235, 0.75], [2.29, 0.73], [2.405, 0.95], [2.4, 0.7]]
-borderPolygon = [[0, 0], [2.125, 0], [2.9325, 1.5], [2.975, 1.6], [2.9325, 1.7], [2.295, 2.1], [0.85, 2.3], [0.17, 1.2]]
+points = np.array([[0.515, 0.8], [0.585, 0.995], [0.735, 1.1], [0.76, 0.845], [0.88, 0.755], [0.885, 0.55], [0.93, 1.07], [1.11, 0.4], [1.155, 1.135], [1.21, 0.68], [1.345, 0.48], [1.38, 0.565], [2.235, 0.75], [2.29, 0.73], [2.405, 0.95], [2.4, 0.7]])
+border_polygon = np.array([[0, 0], [2.125, 0], [2.9325, 1.5], [2.975, 1.6], [2.9325, 1.7], [2.295, 2.1], [0.85, 2.3], [0.17, 1.2]])
 radius = 0.45
-# points = [[0, 0], [1, 3], [5, 3], [2, 4], [0, 5]]
-# borderPolygon = [[0,0], [10, 0], [10, 10], [0, 10]]
 
-simulate(points, radius, borderPolygon, 20)
-
-# print(H(points, getVoronoiPartition(points, borderPolygon)))
-# printVoronoiPartition(points, getVoronoiPartition(points, borderPolygon))
+simulate(points, radius, border_polygon, 20)
