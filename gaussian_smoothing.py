@@ -28,12 +28,16 @@ def test_2d():
     y1 = gaussian_filter(y, sigma=20)
     y2 = gaussian_filter(y, sigma=40)
     y3 = gaussian_filter(y, sigma=60)
+    y4 = gaussian_filter(y, sigma=80)
+    y5 = gaussian_filter(y, sigma=100)
 
     fig = plt.figure()
-    ax = fig.add_subplot(2, 2, 1)
-    ax1 = fig.add_subplot(2, 2, 2)
-    ax2 = fig.add_subplot(2, 2, 3)
-    ax3 = fig.add_subplot(2, 2, 4)
+    ax = fig.add_subplot(2, 3, 1)
+    ax1 = fig.add_subplot(2, 3, 2)
+    ax2 = fig.add_subplot(2, 3, 3)
+    ax3 = fig.add_subplot(2, 3, 4)
+    ax4 = fig.add_subplot(2, 3, 5)
+    ax5 = fig.add_subplot(2, 3, 6)
 
     ax.plot(x, y)
     ax.set_title('sigma = 0')
@@ -43,6 +47,10 @@ def test_2d():
     ax2.set_title('sigma = 40')
     ax3.plot(x, y3)
     ax3.set_title('sigma = 60')
+    ax4.plot(x, y4)
+    ax4.set_title('sigma = 80')
+    ax5.plot(x, y5)
+    ax5.set_title('sigma = 100')
     plt.show()
 
 def test_3d():
@@ -71,4 +79,4 @@ def test_3d():
     draw(ax3, z3, 'sigma = 20')
     plt.show()
 
-test_3d()
+test_2d()
