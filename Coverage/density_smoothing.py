@@ -15,7 +15,7 @@ x = np.linspace(-3, 3, 1001)
 # x = np.linspace(0, 50, 100)
 
 # Determine the function for Gaussian in 2D space
-def f2d(x : np.ndarray , p : np.ndarray):
+def f1d(x : np.ndarray , p : np.ndarray):
     y = np.zeros(x.shape)           # Initial value for y
     p = np.array([2, 1, 1.9, 2.35, 0.1])    # Gaussian Point
     for point in p:
@@ -24,7 +24,7 @@ def f2d(x : np.ndarray , p : np.ndarray):
     return y
 
 # Determine the function for Gaussian in 3D space
-def f3d(x : np.ndarray, y : np.ndarray):
+def f2d(x : np.ndarray, y : np.ndarray):
     z = np.zeros((x.shape[0], y.shape[0]))      # z is initial value for x and y
     p = np.array([[2, 0.25], [1, 2.25], [1.9, 1.9], [2.35, 1.25], [0.1, 0.1]]) # Gaussian Point
     for point in p:
@@ -38,8 +38,8 @@ def add_noise(x : np.ndarray):
     return result
 
 
-def test_2d_gaussian():
-    y = f2d(x, np.array([0.25, 2.25, 1.9, 1.25, 0.1])) # y axis
+def test_1d_gaussian():
+    y = f1d(x, np.array([0.25, 2.25, 1.9, 1.25, 0.1])) # y axis
     y1 = gaussian_filter(y, sigma=10)
 
 
@@ -66,12 +66,12 @@ ax4.set_title('sigma = 500')
 ax5.plot(x, y5)
 ax5.set_title('sigma = 1000')
 
-test_2d_gaussian()
+test_1d_gaussian()
 # Execute with Noisy data
 # z = np.exp(1.0 + np.power(x, 0.5) - np.exp(x / 15.0)) + np.random.normal(scale=1.0, size=x.shape)
 
 # Execute with data from 2D function
-z = f2d(x, np.array([2, 1, 1.9, 2.35, 0.1])) # x axis
+z = f1d(x, np.array([2, 1, 1.9, 2.35, 0.1])) # x axis
 plt.plot(z)
 
 y1 = gaussian_filter(z, sigma=10)
